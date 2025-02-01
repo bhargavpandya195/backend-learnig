@@ -9,8 +9,8 @@ const UserSchema = new Schema(
       required: true,
       unique: true,
       lowercase: true,
-      trim: true, // Trims any leading or trailing spaces
-      index: true, // Creates an index on this field for faster queries
+      trim: true,
+      index: true,
     },
     email: {
       type: String,
@@ -26,7 +26,7 @@ const UserSchema = new Schema(
       index: true,
     },
     avatar: {
-      type: String, //cloudnary
+      type: String,
       required: true,
     },
     coverTmg: {
@@ -34,7 +34,7 @@ const UserSchema = new Schema(
     },
     WatchHistory: [
       {
-        type: Schema.type.objectId,
+        type: Schema.Types.ObjectId, // ✅ Fixed the issue here
         ref: "Video",
       },
     ],
@@ -47,19 +47,47 @@ const UserSchema = new Schema(
     },
   },
   {
-    timestamps: true, // Adds createdAt and updatedAt fields automatically
+    timestamps: true,
   }
 );
 
-// password incrypt code
+// **Password Hashing Middleware**
 UserSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
-
-  this.password = bcrypt.hash(this.password, 10);
+  this.password = await bcrypt.hash(this.password, 10);
   next();
 });
 
+// **Compare Hashed Password**
 UserSchema.methods.isPasswordCorrect = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
+
+UserSchema.methods.generateAccessToken = async function () {
+  return jwt.sign(
+    {
+      id: this._id,
+      name: this.fullName,
+      email: this.email,
+      userName: this.userName,
+    },
+    process.env.ACCESS_TOKEN_SECRET, // ✅ Ensure this is set in `.env`
+    {
+      expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+    }
+  );
+};
+
+UserSchema.methods.generateRefreshToken = async function () {
+  return jwt.sign(
+    {
+      id: this._id,
+    },
+    process.env.REFRESH_TOKEN_SECRET, // ✅ Ensure this is set in `.env`
+    {
+      expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
+    }
+  );
+};
+
 export const User = mongoose.model("User", UserSchema);
