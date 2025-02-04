@@ -3,7 +3,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import { User } from "../models/User.Model.js";
 import { uploadOnCloudinary } from "../utils/Cloudinary.js";
 import { ApiResponse } from "../utils/ApiRespnseHandler.js";
-
+import jwt from "jsonwebtoken";
 //Generate Access Token
 const generateAccessAndRefreshTokens = async (userId) => {
   try {
@@ -21,7 +21,10 @@ const generateAccessAndRefreshTokens = async (userId) => {
   } catch (error) {
     console.error("🔥 Server Error:", error.message || error);
     // Now throwing the error to be caught by your error handler middleware
-    throw new ApiError(500, "🚨 Server error occurred. Please try again later.");
+    throw new ApiError(
+      500,
+      "🚨 Server error occurred. Please try again later."
+    );
   }
 };
 
@@ -118,11 +121,11 @@ const registerUser = asyncHandler(async (req, res, next) => {
     );
   }
 });
+
 //login the user
 const loginUser = asyncHandler(async (req, res, next) => {
   const { userName, email, password } = req.body;
   console.log("Received login request:", req.body);
-
 
   // Ensure either username or email is provided
   if (!userName?.trim() && !email?.trim()) {
@@ -133,11 +136,10 @@ const loginUser = asyncHandler(async (req, res, next) => {
   const user = await User.findOne({
     $or: [
       { userName: userName?.toLowerCase() },
-      { email: email?.toLowerCase() }
+      { email: email?.toLowerCase() },
     ],
   });
-  console.log("user",user);
-  
+  console.log("user", user);
 
   if (!user) {
     return next(new ApiError(404, "❗ User does not exist"));
@@ -148,43 +150,50 @@ const loginUser = asyncHandler(async (req, res, next) => {
   if (!isPasswordValid) {
     return next(new ApiError(401, "❌ Incorrect password"));
   }
-   const accessToken = await user.generateAccessToken(user._id);  // Await the promise
-  const refreshToken = await user.generateRefreshToken(user._id);  // Await the promise
-
+  const accessToken = await user.generateAccessToken(user._id); // Await the promise
+  const refreshToken = await user.generateRefreshToken(user._id); // Await the promise
 
   console.log("refreshToken", refreshToken);
-  console.log("accessToken",accessToken);
-  
+  console.log("accessToken", accessToken);
 
-  const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+  const loggedInUser = await User.findById(user._id).select(
+    "-password -refreshToken"
+  );
 
   const options = {
     httpOnly: true,
     secure: true,
   };
 
-  return res.status(200)
+  return res
+    .status(200)
     .cookie("accessToken", accessToken, options)
     .cookie("refreshToken", refreshToken, options)
     .json(
-      new ApiResponse(200, {
-        user: loggedInUser,
-        accessToken,
-        refreshToken,
-      },
-      "user logged in successfully"
-    )
+      new ApiResponse(
+        200,
+        {
+          user: loggedInUser,
+          accessToken,
+          refreshToken,
+        },
+        "user logged in successfully"
+      )
     );
 });
 
 //logout the user
-const logoutUser = asyncHandler(async (req, res, next) => { 
-  await User.findByIdAndUpdate(req.user._id, {
-    $set: {
-      refreshToken: undefined, // Fixed spelling
-    }
-  }, { new: true }); // Moved outside the update object
-  
+const logoutUser = asyncHandler(async (req, res, next) => {
+  await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        refreshToken: undefined, // Fixed spelling
+      },
+    },
+    { new: true }
+  ); // Moved outside the update object
+
   const options = {
     httpOnly: true,
     secure: true,
@@ -194,9 +203,59 @@ const logoutUser = asyncHandler(async (req, res, next) => {
     .status(200)
     .clearCookie("accessToken", options) // Fixed `clearCookies` to `clearCookie`
     .clearCookie("refreshToken", options) // Fixed `clearCookies` to `clearCookie`
-    .json(
-      new ApiResponse(200, {}, "User logged out successfully")
-    );
+    .json(new ApiResponse(200, {}, "User logged out successfully"));
 });
 
-export { registerUser, loginUser,logoutUser};
+const refreshAccessToken = asyncHandler(async (req, res, next) => {
+  try {
+    // Get refresh token from cookies or request body (for mobile apps)
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+
+    // If no refresh token is provided, return unauthorized
+    if (!incomingRefreshToken) {
+      return next(new ApiError(401, "❗ Unauthorized request - No refresh token provided"));
+    }
+
+    // Verify the refresh token
+    const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+
+    // Find user by decoded token ID
+    const user = await User.findOne({ _id: decodedToken.id });
+
+    // If user not found, return unauthorized
+    if (!user) {
+      return next(new ApiError(401, "❗ Unauthorized request - User not found"));
+    }
+
+    // Check if the refresh token matches the stored one
+    if (incomingRefreshToken !== user.refreshToken) {
+      return next(new ApiError(401, "❗ Refresh token is expired or already used"));
+    }
+
+    // Generate new tokens
+    const accessToken = await user.generateAccessToken();
+    const newRefreshToken = await user.generateRefreshToken();
+
+    // Update user's refresh token in the database
+    user.refreshToken = newRefreshToken;
+    await user.save();
+
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+
+    return res
+      .status(200)
+      .clearCookie("accessToken", options) // Clear old access token
+      .clearCookie("refreshToken", options) // Clear old refresh token
+      .cookie("accessToken", accessToken, options) // Set new access token
+      .cookie("refreshToken", newRefreshToken, options) // Set new refresh token
+      .json(new ApiResponse(200, { accessToken, refreshToken: newRefreshToken }, "Access token refreshed successfully"));
+  } catch (error) {
+    return next(new ApiError(403, "❗ Invalid or expired refresh token"));
+  }
+});
+
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken };
